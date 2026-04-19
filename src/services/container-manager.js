@@ -111,7 +111,7 @@ class ContainerManager {
   async createPod(userId) {
     try {
       const podName = `cloud-ai-server-user-${userId}`;
-      const image = process.env.AI_SERVER_IMAGE || 'docker.io/yourusername/nl2sql-ai-server:latest';
+      const image = process.env.AI_SERVER_IMAGE || 'docker.io/gamebrain30/nl2sql-ai-server:latest';
 
       logger.info(`Creating pod: ${podName}`);
 
