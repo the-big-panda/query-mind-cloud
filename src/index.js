@@ -39,7 +39,7 @@ class CloudBackendServer {
       await initializeDatabase();
 
       this.containerManager = new ContainerManager();
-      await this.containerManager.initialize();
+      await this.containerManager.initialize(); // Non-fatal: continues even if K8s unavailable
 
       this.setupMiddleware();
       this.setupRoutes();

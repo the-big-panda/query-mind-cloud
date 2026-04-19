@@ -9,15 +9,19 @@ class ContainerManager {
     this.k8sCoreApi = null;
     this.k8sApi = null;
     this.namespace = process.env.K8S_NAMESPACE || 'default';
+    this.isK8sAvailable = false; // Track if Kubernetes is available
   }
 
   /**
    * Initialize Kubernetes connection
+   * Supports both in-cluster (pod) and out-of-cluster (native EC2) execution
+   * Non-fatal: returns gracefully if K8s not available
    */
   async initialize() {
     try {
-      // Load kubeconfig
-      this.kc.loadFromCluster();
+      // Load kubeconfig - works for both in-cluster and out-of-cluster (EC2 native)
+      // loadFromDefault tries: in-cluster config → $KUBECONFIG env var → ~/.kube/config
+      this.kc.loadFromDefault();
       
       this.k8sAppsApi = this.kc.makeApiClient(k8s.AppsV1Api);
       this.k8sCoreApi = this.kc.makeApiClient(k8s.CoreV1Api);
@@ -25,11 +29,17 @@ class ContainerManager {
 
       // Test connectivity
       const namespaces = await this.k8sCoreApi.listNamespace();
+      this.isK8sAvailable = true;
       logger.info(`Kubernetes connected - Namespace: ${this.namespace}`);
       logger.info(`Available namespaces: ${namespaces.body.items.length}`);
     } catch (error) {
-      logger.error(`Failed to initialize Kubernetes: ${error.message}`);
-      throw error;
+      // Non-fatal: K8s not available, but server can still run
+      this.isK8sAvailable = false;
+      logger.warn(`Kubernetes not available (non-fatal): ${error.message}`);
+      logger.warn('Features requiring Kubernetes pod management will be disabled');
+      logger.info('To enable: Configure kubectl on this machine');
+      logger.info('  For EKS: aws eks update-kubeconfig --name <cluster-name> --region <region>');
+      logger.info('  Server will continue running without pod orchestration');
     }
   }
 
@@ -37,6 +47,12 @@ class ContainerManager {
    * Create or get pod for user (PERSISTENT)
    */
   async ensureContainer(userId) {
+    // Check if Kubernetes is available
+    if (!this.isK8sAvailable) {
+      logger.error('Cannot create container: Kubernetes not available');
+      throw new Error('Kubernetes pod orchestration not available. Setup instructions: Configure kubectl and redeploy');
+    }
+
     try {
       const podName = `cloud-ai-server-user-${userId}`;
 

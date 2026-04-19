@@ -2,10 +2,10 @@ const redis = require('redis');
 const config = require('../config/env');
 const logger = require('./logger');
 
-const redisClient = redis.createClient({
+// Build Redis client config (only include password if it exists)
+const redisConfig = {
   host: config.REDIS.host,
   port: config.REDIS.port,
-  password: config.REDIS.password,
   db: config.REDIS.db,
   socket: {
     reconnectStrategy: (retries) => {
@@ -16,7 +16,14 @@ const redisClient = redis.createClient({
       return retries * 50;
     },
   },
-});
+};
+
+// Only add password if it's provided
+if (config.REDIS.password && config.REDIS.password.trim() !== '') {
+  redisConfig.password = config.REDIS.password;
+}
+
+const redisClient = redis.createClient(redisConfig);
 
 redisClient.on('error', (err) => {
   logger.error(`Redis connection error: ${err.message}`);
