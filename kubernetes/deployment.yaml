@@ -1,0 +1,108 @@
+# Cloud Backend Kubernetes Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloud-backend
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cloud-backend
+  template:
+    metadata:
+      labels:
+        app: cloud-backend
+        managed: cloud-backend
+    spec:
+      serviceAccountName: cloud-backend
+      containers:
+      - name: cloud-backend
+        image: nl2sql-cloud-backend:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "3000"
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: cloud-backend-config
+              key: db_host
+        - name: DB_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: cloud-backend-config
+              key: db_name
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: cloud-backend-secrets
+              key: db_user
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cloud-backend-secrets
+              key: db_password
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: cloud-backend-config
+              key: redis_host
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: cloud-backend-secrets
+              key: jwt_secret
+        - name: K8S_CONTAINER_IMAGE
+          valueFrom:
+            configMapKeyRef:
+              name: cloud-backend-config
+              key: worker_image
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloud-backend
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector:
+    app: cloud-backend
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 3000
+    name: http
+  - protocol: TCP
+    port: 443
+    targetPort: 3000
+    name: https

@@ -1,0 +1,25 @@
+# ConfigMap for Cloud Backend
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloud-backend-config
+  namespace: default
+data:
+  db_host: "postgres.default.svc.cluster.local"
+  db_name: "nl2sql_backend"
+  redis_host: "redis.default.svc.cluster.local"
+  worker_image: "nl2sql-worker:latest"
+  log_level: "info"
+  jwt_expiry: "24h"
+---
+# Secret for Cloud Backend Credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloud-backend-secrets
+  namespace: default
+type: Opaque
+stringData:
+  db_user: "postgres"
+  db_password: "change_me_in_production"
+  jwt_secret: "change_me_in_production_with_strong_secret"

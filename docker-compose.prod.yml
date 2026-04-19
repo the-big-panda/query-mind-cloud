@@ -1,0 +1,140 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database - production setup
+  postgres:
+    image: postgres:16-alpine
+    container_name: nl2sql-postgres-prod
+    environment:
+      POSTGRES_DB: nl2sql_backend
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nl2sql-network-prod
+    restart: always
+
+  # Redis for session management
+  redis:
+    image: redis:7-alpine
+    container_name: nl2sql-redis-prod
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_prod:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nl2sql-network-prod
+    restart: always
+
+  # Cloud Backend - production
+  cloud-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nl2sql-cloud-backend-prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      LOG_LEVEL: info
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: nl2sql_backend
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRY: 24h
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      K8S_NAMESPACE: ${K8S_NAMESPACE:-default}
+      K8S_CONTAINER_IMAGE: ${K8S_CONTAINER_IMAGE}
+      CONTAINER_IDLE_TIMEOUT: 3600000
+      CONTAINER_CHECK_INTERVAL: 60000
+      BE_PROJECT_URL: http://be-project:8080
+      BE_PROJECT_WS_URL: ws://be-project:8080
+    ports:
+      - "3000:3000"
+    networks:
+      - nl2sql-network-prod
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  # BE-Project - production
+  be-project:
+    build:
+      context: ../BE-Project
+      dockerfile: Dockerfile
+    container_name: nl2sql-be-project-prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      LOG_LEVEL: info
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRY: 24h
+      PG_DATABASE_USER: ${DB_USER:-postgres}
+      PG_DATABASE_HOST: postgres
+      PG_DATABASE_NAME: nl2sql_be_project
+      PG_DATABASE_PORT: 5432
+      PG_DATABASE_PASSWORD: ${DB_PASSWORD}
+      LOCAL_DB_TYPE: postgres
+      CORS_ORIGIN: ${CORS_ORIGIN}
+    ports:
+      - "8080:8080"
+    networks:
+      - nl2sql-network-prod
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1.5G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+volumes:
+  postgres_data_prod:
+    driver: local
+  redis_data_prod:
+    driver: local
+
+networks:
+  nl2sql-network-prod:
+    driver: bridge
