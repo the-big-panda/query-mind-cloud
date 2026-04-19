@@ -1,9 +1,24 @@
 # Cloud Control Backend
 
-A scalable, cloud-native backend for distributed NL2SQL systems. Handles user authentication, container orchestration, real-time WebSocket communication, and message routing.
+A production-ready, cloud-native backend for distributed NL2SQL systems. Runs natively and manages containerized worker instances via Kubernetes.
+
+## 🔑 Architecture: 100% Native (Except Worker Pods)
+
+**Everything runs NATIVELY - NO containers except worker pods:**
+- ✅ Cloud Backend: Native Node.js process
+- ✅ PostgreSQL: Native database server
+- ✅ Redis: Native cache server
+- ✅ Worker Pods: Kubernetes-managed (only containerized part)
+
+**Why?**
+- Direct system access for simplicity and performance
+- Real Kubernetes API integration
+- No unnecessary containerization
+- Only worker containers (per user) are containerized via K8s
 
 ## Features
 
+✅ **Native Execution** - Runs on host, manages containers  
 ✅ **JWT Authentication** - Secure token-based authentication  
 ✅ **WebSocket Support** - Bi-directional real-time communication  
 ✅ **Kubernetes Integration** - Auto-scaling container management  
@@ -18,42 +33,69 @@ A scalable, cloud-native backend for distributed NL2SQL systems. Handles user au
 ## Architecture
 
 ```
-User (WebSocket) 
-    ↓
-Cloud Backend (Express + ws)
-    ├─ JWT Auth
-    ├─ WebSocket Router
-    ├─ Container Manager → Kubernetes API
-    ├─ Database → PostgreSQL
-    ├─ Sessions → Redis
-    └─ REST API
-
-Kubernetes
-    ├─ Pod-per-user (nl2sql-worker)
-    ├─ Auto-cleanup on idle
-    └─ Health checks & liveness probes
+┌────────────────────────────────────────────┐
+│         Native System (Your Computer)       │
+├────────────────────────────────────────────┤
+│                                            │
+│  Cloud Backend    PostgreSQL    Redis      │
+│  (Node.js)        (Server)      (Server)   │
+│  npm run dev      psql server    redis-cli │
+│                                            │
+└─────────────────┬──────────────────────────┘
+                  │
+                  ↓ (API calls)
+        ┌─────────────────────┐
+        │  Kubernetes Cluster │
+        ├─────────────────────┤
+        │  Worker Pod (User1) │  ← Only thing containerized
+        │  Worker Pod (User2) │  ← Created per user
+        │  Worker Pod (User3) │  ← Managed by backend
+        └─────────────────────┘
 ```
+
+**Why 100% Native?** Simplicity, performance, direct system access. Only worker containers (created by backend for users) are containerized.
+
+---
 
 ## Quick Start
 
-### Local Development (Docker Compose)
+### Local Development (Native Backend + Docker Services)
 
+The Cloud Backend runs **natively** on your system (not in a container). It automatically manages containerized worker instances via Kubernetes or Docker.
+
+**Step 1: Start PostgreSQL & Redis (Docker)**
 ```bash
-# Clone repository
 cd cloud-backend
 
-# Copy environment file
+# Copy and configure environment
 cp .env.example .env
 
-# Start services
+# Start support services (PostgreSQL, Redis)
 docker-compose up -d
 
-# Wait for containers to be ready
+# Verify services
 docker-compose ps
-
-# Access backend
-curl http://localhost:3000/api/health
 ```
+
+**Step 2: Run Cloud Backend (Native)**
+```bash
+# In a new terminal
+npm install
+
+# Initialize database
+npm run migrate
+
+# Start backend
+npm run dev
+```
+
+Server will be available at `http://localhost:3000`
+
+### Docker Compose Services
+
+This compose file runs only the support services:
+- **PostgreSQL** (port 5432) - Conversation storage
+- **Redis** (port 6379) - Session management
 
 ### Kubernetes Deployment
 
