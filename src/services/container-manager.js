@@ -333,6 +333,39 @@ class ContainerManager {
       return false;
     }
   }
+
+  /**
+   * Cleanup idle containers - remove pods inactive for more than timeout
+   */
+  async cleanupIdleContainers() {
+    // Skip if Kubernetes not available
+    if (!this.isK8sAvailable) {
+      return;
+    }
+
+    try {
+      // Cleanup timeout: 1 hour (3600 seconds)
+      const IDLE_TIMEOUT = 3600;
+      const now = Date.now();
+
+      // Get all active sessions from database
+      const result = await db.query(
+        'SELECT user_id, container_id, last_activity FROM user_sessions WHERE is_active = true'
+      );
+
+      for (const session of result.rows) {
+        const lastActivity = new Date(session.last_activity).getTime();
+        const idleTime = (now - lastActivity) / 1000;
+
+        if (idleTime > IDLE_TIMEOUT) {
+          logger.info(`Cleaning up idle container for user ${session.user_id} (idle for ${Math.round(idleTime / 60)} minutes)`);
+          await this.deleteContainer(session.user_id);
+        }
+      }
+    } catch (error) {
+      logger.error(`Cleanup error: ${error.message}`);
+    }
+  }
 }
 
 module.exports = ContainerManager;
