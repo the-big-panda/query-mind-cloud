@@ -87,6 +87,11 @@ class CloudBackendServer {
    * Setup Express routes
    */
   setupRoutes() {
+    // Health check (root level, no auth)
+    this.app.get('/health', (req, res) => {
+      res.json({ status: 'healthy', service: 'cloud-backend', timestamp: new Date().toISOString() });
+    });
+
     // Health check (no auth)
     this.app.use('/api', systemRoutes);
 
