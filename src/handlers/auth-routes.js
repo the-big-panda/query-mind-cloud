@@ -73,7 +73,7 @@ router.post('/verify', (req, res) => {
 /**
  * GET /api/auth/container - Get user's container info
  */
-router.get('/container', auth.authenticateToken, async (req, res) => {
+router.get('/container', auth.authenticateRest, async (req, res) => {
   try {
     const userId = req.user.userId || req.user.user_id;
 

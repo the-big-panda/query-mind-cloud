@@ -8,7 +8,7 @@ const router = express.Router();
 /**
  * GET /api/conversations - Get user's conversations
  */
-router.get('/', auth.authenticateHTTP, async (req, res) => {
+router.get('/', auth.authenticateRest, async (req, res) => {
   try {
     const userId = req.user.user_id;
     const limit = parseInt(req.query.limit) || 20;
@@ -28,7 +28,7 @@ router.get('/', auth.authenticateHTTP, async (req, res) => {
 /**
  * GET /api/conversations/:conversationId - Get specific conversation
  */
-router.get('/:conversationId', auth.authenticateHTTP, async (req, res) => {
+router.get('/:conversationId', auth.authenticateRest, async (req, res) => {
   try {
     const { conversationId } = req.params;
     const userId = req.user.user_id;
@@ -59,7 +59,7 @@ router.get('/:conversationId', auth.authenticateHTTP, async (req, res) => {
 /**
  * POST /api/conversations - Create new conversation
  */
-router.post('/', auth.authenticateHTTP, async (req, res) => {
+router.post('/', auth.authenticateRest, async (req, res) => {
   try {
     const userId = req.user.user_id;
     const { containerId, title } = req.body;
@@ -80,7 +80,7 @@ router.post('/', auth.authenticateHTTP, async (req, res) => {
 /**
  * PUT /api/conversations/:conversationId - Update conversation
  */
-router.put('/:conversationId', auth.authenticateHTTP, async (req, res) => {
+router.put('/:conversationId', auth.authenticateRest, async (req, res) => {
   try {
     const { conversationId } = req.params;
     const userId = req.user.user_id;
@@ -111,7 +111,7 @@ router.put('/:conversationId', auth.authenticateHTTP, async (req, res) => {
 /**
  * DELETE /api/conversations/:conversationId - Delete conversation
  */
-router.delete('/:conversationId', auth.authenticateHTTP, async (req, res) => {
+router.delete('/:conversationId', auth.authenticateRest, async (req, res) => {
   try {
     const { conversationId } = req.params;
     const userId = req.user.user_id;

@@ -26,7 +26,7 @@ router.get('/status', (req, res) => {
 /**
  * GET /api/ws-stats - WebSocket statistics (requires auth)
  */
-router.get('/ws-stats', auth.authenticateHTTP, (req, res) => {
+router.get('/ws-stats', auth.authenticateRest, (req, res) => {
   if (!req.wsService) {
     return res.status(503).json({ error: 'WebSocket service not available' });
   }
