@@ -1,370 +1,334 @@
-const k8s = require('@kubernetes/client-node');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+
+const config = require('../config/env');
 const logger = require('../utils/logger');
 const db = require('../utils/database');
 
+const execFileAsync = promisify(execFile);
+
 class ContainerManager {
   constructor() {
-    this.kc = new k8s.KubeConfig();
-    this.k8sAppsApi = null;
-    this.k8sCoreApi = null;
-    this.k8sApi = null;
-    this.namespace = process.env.K8S_NAMESPACE || 'default';
-    this.isK8sAvailable = false; // Track if Kubernetes is available
+    this.isDockerAvailable = false;
+    this.isSwarmAvailable = false;
+    this.networkName = config.DOCKER.network;
+    this.image = config.DOCKER.aiServerImage;
+    this.targetPort = config.DOCKER.aiServerPort;
+    this.publicHost = config.DOCKER.publicHost;
+    this.portStart = config.DOCKER.portStart;
+    this.portEnd = config.DOCKER.portEnd;
   }
 
-  /**
-   * Initialize Kubernetes connection
-   * Supports both in-cluster (pod) and out-of-cluster (native EC2) execution
-   * Non-fatal: returns gracefully if K8s not available
-   */
   async initialize() {
     try {
-      // Load kubeconfig - works for both in-cluster and out-of-cluster (EC2 native)
-      // loadFromDefault tries: in-cluster config → $KUBECONFIG env var → ~/.kube/config
-      this.kc.loadFromDefault();
-      
-      this.k8sAppsApi = this.kc.makeApiClient(k8s.AppsV1Api);
-      this.k8sCoreApi = this.kc.makeApiClient(k8s.CoreV1Api);
-      this.k8sApi = this.kc.makeApiClient(k8s.CustomObjectsApi);
+      await this.runDocker(['version', '--format', '{{.Server.Version}}']);
+      this.isDockerAvailable = true;
 
-      // Test connectivity
-      const namespaces = await this.k8sCoreApi.listNamespace();
-      this.isK8sAvailable = true;
-      logger.info(`Kubernetes connected - Namespace: ${this.namespace}`);
-      logger.info(`Available namespaces: ${namespaces.body.items.length}`);
+      const swarmState = await this.runDocker(['info', '--format', '{{.Swarm.LocalNodeState}}']);
+      this.isSwarmAvailable = swarmState.trim() === 'active';
+
+      if (!this.isSwarmAvailable) {
+        logger.warn('Docker is available, but Swarm is not active. Run: docker swarm init');
+        return;
+      }
+
+      await this.ensureNetwork();
+      logger.info(`Docker Swarm connected - network: ${this.networkName}, image: ${this.image}`);
     } catch (error) {
-      // Non-fatal: K8s not available, but server can still run
-      this.isK8sAvailable = false;
-      logger.warn(`Kubernetes not available (non-fatal): ${error.message}`);
-      logger.warn('Features requiring Kubernetes pod management will be disabled');
-      logger.info('To enable: Configure kubectl on this machine');
-      logger.info('  For EKS: aws eks update-kubeconfig --name <cluster-name> --region <region>');
-      logger.info('  Server will continue running without pod orchestration');
+      this.isDockerAvailable = false;
+      this.isSwarmAvailable = false;
+      logger.warn(`Docker Swarm not available (non-fatal): ${error.message}`);
+      logger.info('Container orchestration is disabled until Docker Swarm is configured');
     }
   }
 
-  /**
-   * Create or get pod for user (PERSISTENT)
-   */
   async ensureContainer(userId) {
-    // Check if Kubernetes is available
-    if (!this.isK8sAvailable) {
-      logger.error('Cannot create container: Kubernetes not available');
-      throw new Error('Kubernetes pod orchestration not available. Setup instructions: Configure kubectl and redeploy');
-    }
+    this.requireSwarm();
 
-    try {
-      const podName = `cloud-ai-server-user-${userId}`;
-
-      // Check if pod exists in database
-      const result = await db.query(
-        'SELECT container_id FROM user_sessions WHERE user_id = $1 AND is_active = true LIMIT 1',
-        [userId]
-      );
-
-      if (result.rows.length > 0) {
-        const existingPod = result.rows[0].container_id;
-        
-        try {
-          // Verify pod still exists
-          const pod = await this.k8sCoreApi.readNamespacedPod(podName, this.namespace);
-          
-          if (pod.body.status.phase === 'Running') {
-            logger.debug(`Pod ${podName} already running for user ${userId}`);
-            return {
-              containerId: pod.body.metadata.uid.substring(0, 12),
-              containerName: podName,
-              isNew: false,
-            };
-          }
-        } catch (err) {
-          logger.warn(`Pod ${podName} no longer exists, creating new one`);
-        }
+    const existing = await this.getActiveSession(userId);
+    if (existing) {
+      const service = await this.inspectService(existing.container_name);
+      if (service) {
+        await this.touchSession(userId);
+        return {
+          containerId: existing.container_id,
+          containerName: existing.container_name,
+          containerUrl: existing.container_url,
+          containerPort: existing.container_port,
+          isNew: false,
+        };
       }
 
-      // Create new pod
-      const podInfo = await this.createPod(userId);
-      
-      // Store in database
-      await db.query(
-        `INSERT INTO user_sessions (user_id, container_id, is_active) 
-         VALUES ($1, $2, true)
-         ON CONFLICT (user_id) DO UPDATE SET 
-         container_id = $2, is_active = true`,
-        [userId, podInfo.containerId]
-      );
-
-      logger.info(`Created new pod ${podName} for user ${userId}`);
-      return {
-        ...podInfo,
-        isNew: true,
-      };
-    } catch (error) {
-      logger.error(`Failed to ensure container for user ${userId}: ${error.message}`);
-      throw error;
+      logger.warn(`Stored service ${existing.container_name} was not found; creating a replacement`);
     }
+
+    const created = await this.createService(userId);
+
+    await db.query(
+      `INSERT INTO user_sessions
+        (user_id, container_id, container_name, container_url, container_port, is_active, connected_at, last_activity)
+       VALUES ($1, $2, $3, $4, $5, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT (user_id) DO UPDATE SET
+        container_id = EXCLUDED.container_id,
+        container_name = EXCLUDED.container_name,
+        container_url = EXCLUDED.container_url,
+        container_port = EXCLUDED.container_port,
+        is_active = true,
+        disconnected_at = NULL,
+        connected_at = CURRENT_TIMESTAMP,
+        last_activity = CURRENT_TIMESTAMP`,
+      [userId, created.containerId, created.containerName, created.containerUrl, created.containerPort],
+    );
+
+    return {
+      ...created,
+      isNew: true,
+    };
   }
 
-  /**
-   * Create a new Kubernetes pod
-   */
-  async createPod(userId) {
-    try {
-      const podName = `cloud-ai-server-user-${userId}`;
-      const image = process.env.AI_SERVER_IMAGE || 'docker.io/gamebrain30/nl2sql-ai-server:latest';
+  async createService(userId) {
+    const serviceName = this.getServiceName(userId);
+    const publishedPort = await this.allocatePort();
 
-      logger.info(`Creating pod: ${podName}`);
+    logger.info(`Creating Swarm service ${serviceName} for user ${userId} on port ${publishedPort}`);
 
-      const pod = {
-        apiVersion: 'v1',
-        kind: 'Pod',
-        metadata: {
-          name: podName,
-          namespace: this.namespace,
-          labels: {
-            app: 'cloud-ai-server',
-            userId: userId,
-            managed: 'cloud-backend',
-          },
-        },
-        spec: {
-          restartPolicy: 'Always',
-          containers: [
-            {
-              name: 'ai-server',
-              image: image,
-              imagePullPolicy: 'IfNotPresent',
-              ports: [
-                {
-                  containerPort: 9001,
-                  name: 'http',
-                },
-              ],
-              env: [
-                { name: 'PORT', value: '9001' },
-                { 
-                  name: 'OLLAMA_URL', 
-                  value: process.env.OLLAMA_URL || `http://ollama.${this.namespace}.svc.cluster.local:11434/api/generate`
-                },
-                { name: 'CHROMA_DB_PATH', value: '/app/chroma_storage' },
-              ],
-              resources: {
-                requests: {
-                  cpu: '100m',
-                  memory: '256Mi',
-                },
-                limits: {
-                  cpu: '500m',
-                  memory: '1Gi',
-                },
-              },
-              livenessProbe: {
-                httpGet: {
-                  path: '/health',
-                  port: 9001,
-                },
-                initialDelaySeconds: 30,
-                periodSeconds: 10,
-              },
-              readinessProbe: {
-                httpGet: {
-                  path: '/health',
-                  port: 9001,
-                },
-                initialDelaySeconds: 10,
-                periodSeconds: 5,
-              },
-            },
-          ],
-        },
-      };
+    const args = [
+      'service',
+      'create',
+      '--detach=true',
+      '--name',
+      serviceName,
+      '--network',
+      this.networkName,
+      '--replicas',
+      '1',
+      '--publish',
+      `published=${publishedPort},target=${this.targetPort},mode=ingress`,
+      '--label',
+      'managed-by=cloud-backend',
+      '--label',
+      `nl2sql.user-id=${userId}`,
+      '--env',
+      `PORT=${this.targetPort}`,
+      '--env',
+      `USER_ID=${userId}`,
+      this.image,
+    ];
 
-      // Create the pod
-      const response = await this.k8sCoreApi.createNamespacedPod(this.namespace, pod);
-      logger.info(`Pod ${podName} created successfully`);
+    const serviceId = (await this.runDocker(args)).trim();
+    await this.waitForService(serviceName);
 
-      // Wait for pod to be in Running phase (with timeout)
-      let isReady = false;
-      let attempts = 0;
-      const maxAttempts = 30; // ~30 seconds with 1 second intervals
-
-      while (attempts < maxAttempts && !isReady) {
-        try {
-          const podStatus = await this.k8sCoreApi.readNamespacedPod(podName, this.namespace);
-          if (podStatus.body.status.phase === 'Running') {
-            isReady = true;
-            logger.info(`Pod ${podName} is now running`);
-          }
-        } catch (err) {
-          logger.debug(`Waiting for pod ${podName} to be ready... (attempt ${attempts + 1}/${maxAttempts})`);
-        }
-
-        if (!isReady) {
-          await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
-          attempts++;
-        }
-      }
-
-      if (!isReady) {
-        logger.warn(`Pod ${podName} did not reach Running state after ${maxAttempts} seconds, but continuing...`);
-      }
-
-      return {
-        containerId: response.body.metadata.uid.substring(0, 12),
-        containerName: podName,
-      };
-    } catch (error) {
-      logger.error(`Failed to create pod: ${error.message}`);
-      throw error;
-    }
+    return {
+      containerId: serviceId.substring(0, 12),
+      containerName: serviceName,
+      containerUrl: this.buildContainerUrl(publishedPort),
+      containerPort: publishedPort,
+    };
   }
 
-  /**
-   * Get pod information
-   */
-  async getContainer(podName) {
-    try {
-      const pod = await this.k8sCoreApi.readNamespacedPod(podName, this.namespace);
-      
-      return {
-        id: pod.body.metadata.uid.substring(0, 12),
-        name: pod.body.metadata.name,
-        state: pod.body.status.phase,
-        createdAt: pod.body.metadata.creationTimestamp,
-      };
-    } catch (error) {
-      logger.error(`Failed to get pod info: ${error.message}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Get user's container URL
-   */
   async getUserContainerUrl(userId) {
-    try {
-      const result = await db.query(
-        'SELECT container_id FROM user_sessions WHERE user_id = $1 AND is_active = true LIMIT 1',
-        [userId]
-      );
-
-      if (result.rows.length === 0) {
-        throw new Error(`No active session for user ${userId}`);
-      }
-
-      const podName = `cloud-ai-server-user-${userId}`;
-      const serviceName = podName; // Kubernetes DNS: pod-name.namespace.svc.cluster.local
-      return `http://${serviceName}.${this.namespace}.svc.cluster.local:9001`;
-    } catch (error) {
-      logger.error(`Failed to get container URL for user ${userId}: ${error.message}`);
-      throw error;
+    const session = await this.getActiveSession(userId);
+    if (!session) {
+      throw new Error(`No active session for user ${userId}`);
     }
+
+    return session.container_url || this.buildContainerUrl(session.container_port);
   }
 
-  /**
-   * List all user pods
-   */
   async listContainers() {
-    try {
-      const pods = await this.k8sCoreApi.listNamespacedPod(
-        this.namespace,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        'app=cloud-ai-server'
-      );
+    this.requireSwarm();
 
-      return pods.body.items.filter(pod => 
-        pod.metadata.name.startsWith('cloud-ai-server-user-')
-      );
-    } catch (error) {
-      logger.error(`Failed to list pods: ${error.message}`);
-      throw error;
-    }
+    const output = await this.runDocker([
+      'service',
+      'ls',
+      '--filter',
+      'label=managed-by=cloud-backend',
+      '--format',
+      '{{.ID}}\t{{.Name}}\t{{.Replicas}}\t{{.Image}}\t{{.Ports}}',
+    ]);
+
+    return output
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [id, name, replicas, image, ports] = line.split('\t');
+        return {
+          Id: id,
+          Name: name,
+          Names: [`/${name}`],
+          State: replicas,
+          Image: image,
+          Ports: ports,
+        };
+      });
   }
 
-  /**
-   * Stop pod (but keep it for reuse - just mark as inactive)
-   */
   async stopContainer(userId) {
-    try {
-      const podName = `cloud-ai-server-user-${userId}`;
-
-      // Mark as inactive in database but keep pod for reuse
-      await db.query(
-        'UPDATE user_sessions SET is_active = false, disconnected_at = CURRENT_TIMESTAMP WHERE user_id = $1',
-        [userId]
-      );
-
-      logger.info(`Pod ${podName} marked as inactive (pod persists for reuse)`);
+    const session = await this.getActiveSession(userId);
+    if (!session) {
       return true;
-    } catch (error) {
-      logger.error(`Failed to stop pod for user ${userId}: ${error.message}`);
-      return false;
     }
+
+    await db.query(
+      'UPDATE user_sessions SET is_active = false, disconnected_at = CURRENT_TIMESTAMP WHERE user_id = $1',
+      [userId],
+    );
+
+    logger.info(`Marked service ${session.container_name} inactive for user ${userId}`);
+    return true;
   }
 
-  /**
-   * Delete pod permanently (use with caution)
-   */
   async deleteContainer(userId) {
+    const session = await this.getActiveSession(userId);
+    const serviceName = session?.container_name || this.getServiceName(userId);
+
     try {
-      const podName = `cloud-ai-server-user-${userId}`;
-
-      await this.k8sCoreApi.deleteNamespacedPod(
-        podName,
-        this.namespace,
-        undefined,
-        { gracePeriodSeconds: 30 }
-      );
-
-      logger.info(`Pod ${podName} deleted`);
-
-      // Remove from database
-      await db.query(
-        'DELETE FROM user_sessions WHERE user_id = $1',
-        [userId]
-      );
-
-      return true;
+      await this.runDocker(['service', 'rm', serviceName]);
+      logger.info(`Removed Swarm service ${serviceName}`);
     } catch (error) {
-      logger.error(`Failed to delete pod for user ${userId}: ${error.message}`);
-      return false;
+      logger.warn(`Could not remove service ${serviceName}: ${error.message}`);
     }
+
+    await db.query('DELETE FROM user_sessions WHERE user_id = $1', [userId]);
+    return true;
   }
 
-  /**
-   * Cleanup idle containers - remove pods inactive for more than timeout
-   */
   async cleanupIdleContainers() {
-    // Skip if Kubernetes not available
-    if (!this.isK8sAvailable) {
+    if (!this.isSwarmAvailable) {
       return;
     }
 
-    try {
-      // Cleanup timeout: 1 hour (3600 seconds)
-      const IDLE_TIMEOUT = 3600;
-      const now = Date.now();
+    const idleMs = config.CONTAINER_IDLE_TIMEOUT;
+    const result = await db.query(
+      `SELECT user_id, last_activity
+       FROM user_sessions
+       WHERE is_active = true
+         AND last_activity < NOW() - ($1 * interval '1 millisecond')`,
+      [idleMs],
+    );
 
-      // Get all active sessions from database
-      const result = await db.query(
-        'SELECT user_id, container_id, last_activity FROM user_sessions WHERE is_active = true'
-      );
-
-      for (const session of result.rows) {
-        const lastActivity = new Date(session.last_activity).getTime();
-        const idleTime = (now - lastActivity) / 1000;
-
-        if (idleTime > IDLE_TIMEOUT) {
-          logger.info(`Cleaning up idle container for user ${session.user_id} (idle for ${Math.round(idleTime / 60)} minutes)`);
-          await this.deleteContainer(session.user_id);
-        }
-      }
-    } catch (error) {
-      logger.error(`Cleanup error: ${error.message}`);
+    for (const session of result.rows) {
+      logger.info(`Cleaning up idle Swarm service for user ${session.user_id}`);
+      await this.deleteContainer(session.user_id);
     }
+  }
+
+  async sendMessage(containerId, message) {
+    logger.debug(`sendMessage called for ${containerId}: ${message.type || 'unknown'}`);
+    return false;
+  }
+
+  async markContainerIdle(containerId) {
+    await db.query(
+      'UPDATE user_sessions SET last_activity = CURRENT_TIMESTAMP WHERE container_id = $1',
+      [containerId],
+    );
+    return true;
+  }
+
+  async getActiveSession(userId) {
+    const result = await db.query(
+      'SELECT * FROM user_sessions WHERE user_id = $1 AND is_active = true LIMIT 1',
+      [userId],
+    );
+    return result.rows[0] || null;
+  }
+
+  async touchSession(userId) {
+    await db.query(
+      'UPDATE user_sessions SET last_activity = CURRENT_TIMESTAMP WHERE user_id = $1',
+      [userId],
+    );
+  }
+
+  async inspectService(serviceName) {
+    try {
+      const output = await this.runDocker(['service', 'inspect', serviceName, '--format', '{{.ID}}']);
+      return output.trim();
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async waitForService(serviceName) {
+    const maxAttempts = config.DOCKER.serviceReadyAttempts;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const output = await this.runDocker([
+        'service',
+        'ps',
+        serviceName,
+        '--filter',
+        'desired-state=running',
+        '--format',
+        '{{.CurrentState}}',
+      ]);
+
+      if (output.toLowerCase().includes('running')) {
+        logger.info(`Swarm service ${serviceName} is running`);
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    logger.warn(`Swarm service ${serviceName} was created but did not report running before timeout`);
+  }
+
+  async allocatePort() {
+    const result = await db.query(
+      'SELECT container_port FROM user_sessions WHERE container_port IS NOT NULL',
+    );
+    const usedPorts = new Set(result.rows.map((row) => Number(row.container_port)));
+
+    for (let port = this.portStart; port <= this.portEnd; port += 1) {
+      if (!usedPorts.has(port)) {
+        return port;
+      }
+    }
+
+    throw new Error(`No available AI service ports in range ${this.portStart}-${this.portEnd}`);
+  }
+
+  async ensureNetwork() {
+    try {
+      await this.runDocker(['network', 'inspect', this.networkName]);
+    } catch (error) {
+      await this.runDocker(['network', 'create', '--driver', 'overlay', '--attachable', this.networkName]);
+      logger.info(`Created Swarm overlay network ${this.networkName}`);
+    }
+  }
+
+  getServiceName(userId) {
+    const safeUserId = String(userId).toLowerCase().replace(/[^a-z0-9_.-]/g, '-').substring(0, 48);
+    return `${config.DOCKER.servicePrefix}${safeUserId}`;
+  }
+
+  buildContainerUrl(port) {
+    return `http://${this.publicHost}:${port}`;
+  }
+
+  requireSwarm() {
+    if (!this.isDockerAvailable) {
+      throw new Error('Docker is not available on this host');
+    }
+    if (!this.isSwarmAvailable) {
+      throw new Error('Docker Swarm is not active. Run: docker swarm init');
+    }
+  }
+
+  async runDocker(args) {
+    const { stdout, stderr } = await execFileAsync(config.DOCKER.bin, args, {
+      timeout: config.DOCKER.commandTimeout,
+      maxBuffer: 1024 * 1024,
+    });
+
+    if (stderr) {
+      logger.debug(`docker ${args.join(' ')} stderr: ${stderr.trim()}`);
+    }
+
+    return stdout;
   }
 }
 

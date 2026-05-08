@@ -16,7 +16,6 @@ const ContainerManager = require('./services/container-manager');
 const WebSocketService = require('./services/websocket-service');
 
 const authRoutes = require('./handlers/auth-routes');
-const conversationRoutes = require('./handlers/conversation-routes');
 const systemRoutes = require('./handlers/system-routes');
 
 class CloudBackendServer {
@@ -39,7 +38,7 @@ class CloudBackendServer {
       await initializeDatabase();
 
       this.containerManager = new ContainerManager();
-      await this.containerManager.initialize(); // Non-fatal: continues even if K8s unavailable
+      await this.containerManager.initialize(); // Non-fatal: continues even if Docker Swarm unavailable
 
       this.setupMiddleware();
       this.setupRoutes();
@@ -98,9 +97,6 @@ class CloudBackendServer {
     // Auth routes (no auth required)
     this.app.use('/api/auth', authRoutes);
 
-    // Protected routes
-    this.app.use('/api/conversations', conversationRoutes);
-
     // 404 handler
     this.app.use(notFoundHandler);
 
@@ -120,29 +116,6 @@ class CloudBackendServer {
     // Initialize WebSocket service
     this.wsService = new WebSocketService(this.containerManager);
     this.wsService.initialize(this.server);
-
-    // Upgrade connection with auth
-    this.server.on('upgrade', (req, ws, head) => {
-      // Extract and verify token
-      const token = auth.extractTokenFromHeaders(req.headers);
-
-      if (!token) {
-        ws.close(4001, 'Unauthorized: No token');
-        return;
-      }
-
-      const decoded = auth.verifyToken(token);
-      if (!decoded) {
-        ws.close(4001, 'Unauthorized: Invalid token');
-        return;
-      }
-
-      // Attach user to request
-      req.user = decoded;
-
-      // Let ws handle the connection
-      this.wsService.initialize(this.server);
-    });
 
     // Start heartbeat
     this.wsService.startHeartbeat();

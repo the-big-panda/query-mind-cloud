@@ -29,17 +29,18 @@ module.exports = {
     db: parseInt(process.env.REDIS_DB, 10) || 0,
   },
 
-  // Kubernetes
-  K8S: {
-    namespace: process.env.K8S_NAMESPACE || 'default',
-    serviceAccount: process.env.K8S_SERVICE_ACCOUNT || 'cloud-backend',
-    containerImage: process.env.K8S_CONTAINER_IMAGE || 'nl2sql-worker:latest',
-    containerPort: parseInt(process.env.K8S_CONTAINER_PORT, 10) || 8080,
-    cpuRequest: process.env.K8S_CPU_REQUEST || '500m',
-    cpuLimit: process.env.K8S_CPU_LIMIT || '2000m',
-    memoryRequest: process.env.K8S_MEMORY_REQUEST || '512Mi',
-    memoryLimit: process.env.K8S_MEMORY_LIMIT || '2Gi',
-    registry: process.env.K8S_CONTAINER_REGISTRY || 'localhost:5000',
+  // Docker Swarm
+  DOCKER: {
+    bin: process.env.DOCKER_BIN || 'docker',
+    network: process.env.DOCKER_NETWORK || 'nl2sql-ai',
+    servicePrefix: process.env.DOCKER_SERVICE_PREFIX || 'ai-user-',
+    publicHost: process.env.PUBLIC_CONTAINER_HOST || process.env.EC2_PUBLIC_HOST || 'localhost',
+    aiServerImage: process.env.AI_SERVER_IMAGE || 'docker.io/gamebrain30/nl2sql-ai-server:latest',
+    aiServerPort: parseInt(process.env.AI_SERVER_PORT, 10) || 9001,
+    portStart: parseInt(process.env.AI_SERVER_PORT_START, 10) || 9100,
+    portEnd: parseInt(process.env.AI_SERVER_PORT_END, 10) || 9199,
+    commandTimeout: parseInt(process.env.DOCKER_COMMAND_TIMEOUT, 10) || 30000,
+    serviceReadyAttempts: parseInt(process.env.DOCKER_SERVICE_READY_ATTEMPTS, 10) || 30,
   },
 
   // Container Management

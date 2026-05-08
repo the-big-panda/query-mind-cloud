@@ -19,14 +19,24 @@ async function initializeDatabase() {
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255) NOT NULL UNIQUE,
         container_id VARCHAR(255) NOT NULL,
+        container_name VARCHAR(255),
+        container_url TEXT,
+        container_port INTEGER,
         token VARCHAR(500),
         connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         disconnected_at TIMESTAMP,
-        is_active BOOLEAN DEFAULT true,
-        INDEX idx_user_id (user_id),
-        INDEX idx_container_id (container_id)
+        last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        is_active BOOLEAN DEFAULT true
       );
     `);
+
+    await db.query('CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions (user_id);');
+    await db.query('CREATE INDEX IF NOT EXISTS idx_user_sessions_container_id ON user_sessions (container_id);');
+
+    await db.query('ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS container_name VARCHAR(255);');
+    await db.query('ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS container_url TEXT;');
+    await db.query('ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS container_port INTEGER;');
+    await db.query('ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP;');
 
     logger.info('Created user_sessions table');
 
@@ -37,11 +47,12 @@ async function initializeDatabase() {
         user_id VARCHAR(255) NOT NULL,
         action VARCHAR(100) NOT NULL,
         details TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_user_id (user_id),
-        INDEX idx_action (action)
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    await db.query('CREATE INDEX IF NOT EXISTS idx_activity_logs_user_id ON activity_logs (user_id);');
+    await db.query('CREATE INDEX IF NOT EXISTS idx_activity_logs_action ON activity_logs (action);');
 
     logger.info('Created activity_logs table');
 

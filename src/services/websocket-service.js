@@ -1,8 +1,7 @@
 const WebSocket = require('ws');
 const config = require('../config/env');
 const logger = require('../utils/logger');
-const db = require('../utils/database');
-const redis = require('../utils/redis-client');
+const auth = require('../middleware/auth');
 
 class WebSocketService {
   constructor(containerManager) {
@@ -34,7 +33,8 @@ class WebSocketService {
    */
   async handleConnection(ws, req) {
     try {
-      const userId = req.user?.user_id;
+      const user = this.authenticateRequest(req);
+      const userId = user?.user_id;
       if (!userId) {
         logger.warn('WebSocket connection without user context');
         ws.close(4001, 'Unauthorized');
@@ -86,6 +86,25 @@ class WebSocketService {
       logger.error(`Error handling WebSocket connection: ${error.message}`);
       ws.close(4000, 'Server error');
     }
+  }
+
+  authenticateRequest(req) {
+    const headerToken = auth.extractTokenFromHeaders(req.headers);
+    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    const queryToken = url.searchParams.get('token');
+    const token = headerToken || queryToken;
+
+    if (!token) {
+      return null;
+    }
+
+    const decoded = auth.verifyToken(token);
+    if (!decoded) {
+      return null;
+    }
+
+    const normalizedUser = auth.normalizeUserFields(decoded);
+    return { ...decoded, ...normalizedUser };
   }
 
   /**
@@ -197,33 +216,7 @@ class WebSocketService {
    * Store message in database
    */
   async storeMessage(userId, containerId, role, content) {
-    try {
-      const messageText = typeof content === 'string' ? content : JSON.stringify(content);
-
-      // First get or create conversation
-      let conversation = await db.getOne(
-        'SELECT id FROM conversations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
-        [userId],
-      );
-
-      if (!conversation) {
-        conversation = await db.insert('conversations', {
-          user_id: userId,
-          container_id: containerId,
-          title: `Conversation ${new Date().toISOString()}`,
-        });
-      }
-
-      // Insert message
-      await db.insert('messages', {
-        conversation_id: conversation.id,
-        role,
-        content: messageText,
-      });
-    } catch (error) {
-      logger.error(`Failed to store message: ${error.message}`);
-      // Don't throw - message storage failure shouldn't break communication
-    }
+    logger.debug(`Skipping cloud message persistence for user ${userId}; BE-Project owns conversations`);
   }
 
   /**

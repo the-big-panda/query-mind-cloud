@@ -18,32 +18,8 @@ services:
     networks:
       - cloud-network
 
-  cloud-backend:
-    build: .
-    container_name: cloud-backend
-    ports:
-      - "3000:3000"
-    environment:
-      NODE_ENV: production
-      PORT: 3000
-      JWT_SECRET: your-super-secure-secret-key
-      K8S_NAMESPACE: default
-      OLLAMA_URL: http://ollama:11434/api/generate
-      AI_SERVER_IMAGE: ${AI_SERVER_IMAGE_REGISTRY}/${AI_SERVER_IMAGE_NAME}:${AI_SERVER_IMAGE_TAG}
-    volumes:
-      # Mount kubeconfig for Kubernetes access
-      - ~/.kube/config:/root/.kube/config
-      - ai_chroma_data:/app/chroma_storage
-    depends_on:
-      ollama:
-        condition: service_started
-    restart: unless-stopped
-    networks:
-      - cloud-network
-
 volumes:
   ollama_data:
-  ai_chroma_data:
 
 networks:
   cloud-network:

@@ -29,7 +29,8 @@ router.post('/token', async (req, res) => {
         container: {
           id: containerInfo.containerId,
           name: containerInfo.containerName,
-          url: containerUrl,
+          url: containerInfo.containerUrl || containerUrl,
+          port: containerInfo.containerPort,
           isNew: containerInfo.isNew,
         },
       });
@@ -80,15 +81,14 @@ router.get('/container', auth.authenticateRest, async (req, res) => {
     const containerUrl = await req.containerManager.getUserContainerUrl(userId);
     const containers = await req.containerManager.listContainers();
 
-    const userContainer = containers.find(c => 
-      c.Names[0].includes(`user-${userId}`)
-    );
+    const serviceName = req.containerManager.getServiceName(userId);
+    const userContainer = containers.find(c => c.Name === serviceName || c.Names?.[0] === `/${serviceName}`);
 
     res.json({
       userId,
       container: userContainer ? {
         id: userContainer.Id.substring(0, 12),
-        name: userContainer.Names[0],
+        name: userContainer.Name || userContainer.Names[0],
         state: userContainer.State,
         url: containerUrl,
       } : null,
