@@ -1,5 +1,10 @@
 require('dotenv').config();
 
+function parseIntegerEnv(name, fallback) {
+  const value = parseInt(process.env[name], 10);
+  return Number.isNaN(value) ? fallback : value;
+}
+
 module.exports = {
   // Server
   NODE_ENV: process.env.NODE_ENV || 'development',
@@ -36,20 +41,20 @@ module.exports = {
     servicePrefix: process.env.DOCKER_SERVICE_PREFIX || 'ai-user-',
     publicHost: process.env.PUBLIC_CONTAINER_HOST || process.env.EC2_PUBLIC_HOST || 'localhost',
     aiServerImage: process.env.AI_SERVER_IMAGE || 'docker.io/gamebrain30/nl2sql-ai-server:latest',
-    aiServerPort: parseInt(process.env.AI_SERVER_PORT, 10) || 9001,
-    portStart: parseInt(process.env.AI_SERVER_PORT_START, 10) || 9100,
-    portEnd: parseInt(process.env.AI_SERVER_PORT_END, 10) || 9199,
-    commandTimeout: parseInt(process.env.DOCKER_COMMAND_TIMEOUT, 10) || 30000,
-    serviceReadyAttempts: parseInt(process.env.DOCKER_SERVICE_READY_ATTEMPTS, 10) || 30,
+    aiServerPort: parseIntegerEnv('AI_SERVER_PORT', 9001),
+    portStart: parseIntegerEnv('AI_SERVER_PORT_START', 9100),
+    portEnd: parseIntegerEnv('AI_SERVER_PORT_END', 9199),
+    commandTimeout: parseIntegerEnv('DOCKER_COMMAND_TIMEOUT', 30000),
+    serviceReadyAttempts: parseIntegerEnv('DOCKER_SERVICE_READY_ATTEMPTS', 30),
   },
 
   // AI dependencies
   OLLAMA_URL: process.env.OLLAMA_URL || 'http://localhost:11434/api/generate',
 
   // Container Management
-  CONTAINER_IDLE_TIMEOUT: parseInt(process.env.CONTAINER_IDLE_TIMEOUT, 10) || 3600000,
-  CONTAINER_CHECK_INTERVAL: parseInt(process.env.CONTAINER_CHECK_INTERVAL, 10) || 60000,
-  MAX_CONTAINERS_PER_USER: parseInt(process.env.MAX_CONTAINERS_PER_USER, 10) || 1,
+  CONTAINER_IDLE_TIMEOUT: parseIntegerEnv('CONTAINER_IDLE_TIMEOUT', 0),
+  CONTAINER_CHECK_INTERVAL: parseIntegerEnv('CONTAINER_CHECK_INTERVAL', 60000),
+  MAX_CONTAINERS_PER_USER: parseIntegerEnv('MAX_CONTAINERS_PER_USER', 1),
 
   // CORS
   CORS_ORIGIN: process.env.CORS_ORIGIN || '*',

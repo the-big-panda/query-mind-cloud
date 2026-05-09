@@ -206,6 +206,11 @@ class ContainerManager {
     }
 
     const idleMs = config.CONTAINER_IDLE_TIMEOUT;
+    if (idleMs <= 0) {
+      logger.debug('Idle Swarm service cleanup disabled');
+      return;
+    }
+
     const result = await db.query(
       `SELECT user_id, last_activity
        FROM user_sessions
