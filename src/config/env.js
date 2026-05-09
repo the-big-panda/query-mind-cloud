@@ -43,6 +43,9 @@ module.exports = {
     serviceReadyAttempts: parseInt(process.env.DOCKER_SERVICE_READY_ATTEMPTS, 10) || 30,
   },
 
+  // AI dependencies
+  OLLAMA_URL: process.env.OLLAMA_URL || 'http://localhost:11434/api/generate',
+
   // Container Management
   CONTAINER_IDLE_TIMEOUT: parseInt(process.env.CONTAINER_IDLE_TIMEOUT, 10) || 3600000,
   CONTAINER_CHECK_INTERVAL: parseInt(process.env.CONTAINER_CHECK_INTERVAL, 10) || 60000,

@@ -65,3 +65,15 @@ async function initializeDatabase() {
 }
 
 module.exports = { initializeDatabase };
+
+if (require.main === module) {
+  initializeDatabase()
+    .then(() => {
+      logger.info('Migration completed');
+      process.exit(0);
+    })
+    .catch((error) => {
+      logger.error(`Migration failed: ${error.message}`);
+      process.exit(1);
+    });
+}

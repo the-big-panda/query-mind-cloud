@@ -103,7 +103,7 @@ class ContainerManager {
       '--replicas',
       '1',
       '--publish',
-      `published=${publishedPort},target=${this.targetPort},mode=ingress`,
+      `published=${publishedPort},target=${this.targetPort},mode=host`,
       '--label',
       'managed-by=cloud-backend',
       '--label',
@@ -112,6 +112,12 @@ class ContainerManager {
       `PORT=${this.targetPort}`,
       '--env',
       `USER_ID=${userId}`,
+      '--env',
+      `OLLAMA_URL=${config.OLLAMA_URL}`,
+      '--env',
+      'CHROMADB_TELEMETRY_DISABLED=true',
+      '--env',
+      'OTEL_SDK_DISABLED=true',
       this.image,
     ];
 

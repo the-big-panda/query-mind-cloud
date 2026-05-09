@@ -51,6 +51,7 @@ DOCKER_NETWORK=nl2sql-ai
 DOCKER_SERVICE_PREFIX=ai-user-
 PUBLIC_CONTAINER_HOST=<ec2-public-ip-or-domain>
 AI_SERVER_IMAGE=docker.io/yourusername/nl2sql-ai-server:latest
+OLLAMA_URL=http://localhost:11434/api/generate
 AI_SERVER_PORT=9001
 AI_SERVER_PORT_START=9100
 AI_SERVER_PORT_END=9199
